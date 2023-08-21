@@ -1,4 +1,4 @@
-use std::{time::{Duration, Instant}, thread::{self, JoinHandle}, fs::{OpenOptions, File}, sync::mpsc::{Sender, Receiver}, collections::HashMap};
+use std::{time::{Duration, Instant}, thread::{self, JoinHandle}, fs::{OpenOptions, File}, sync::mpsc::{Sender, Receiver}, collections::HashSet};
 use std::io::prelude::*;
 use chrono::Local;
 use config::{Config, Value};
@@ -32,26 +32,33 @@ fn load_config() -> Config {
 }
 
 fn load_targets(config: &Config) -> Vec<(Sender<()>, JoinHandle<()>)> {
+    let mut lognames = HashSet::<String>::new();
+    let mut ips = HashSet::<String>::new();
     let mut targets_data = Vec::new();
     for target in config.get_array("targets").expect("targets not found in settings file") {
-        let target_config = target.into_table().expect("target is not a table");
-        targets_data.push(init_target(&target_config))
+        let target_config = TargetConfig::from(target);
+        if !ips.insert(target_config.ip.clone()) {
+            println!("Duplicates ip address {}, ignoring target", target_config.ip);
+            continue;
+        }
+        if !lognames.insert(target_config.logname.clone()) {
+            println!("Duplicates logname {}, ignoring target", target_config.logname);
+            continue;
+        }
+        targets_data.push(init_target(&target_config));
     };
     targets_data
 }
 
-fn init_target(target_config: &HashMap<String, Value>) -> (Sender<()>, JoinHandle<()>) {
-    let logname = target_config.get("logname").expect("logname not found in target").clone().into_string().expect("logname is not a valid string");
-    let ip = target_config.get("ip").expect("ip not found in target").clone().into_string().expect("ip is not a valid string");
-    let delay = target_config.get("delay").map(|value| value.clone().into_uint().map(|value| std::cmp::max(value, 10)).expect("delay is not a valid unsigned integer")).unwrap_or(1000);
-    let delay = Duration::from_secs(delay);
+fn init_target(target_config: &TargetConfig) -> (Sender<()>, JoinHandle<()>) {
+    let delay = Duration::from_secs(target_config.delay);
 
-    let addr = ip.parse().expect("Unparsable ip address");
+    let addr = target_config.ip.parse().expect("Unparsable ip address");
     let data = [1,2,3,4];  // ping data
     let timeout = Duration::from_secs(1);
     let options = ping_rs::PingOptions { ttl: 128, dont_fragment: true };
-    let ip: String = ip.to_string();
-    let logname = logname.to_string();
+    let ip: String = target_config.ip.to_string();
+    let logname = target_config.logname.clone();
     let (tx, rx) = channel::<()>();
 
     let join_handle = thread::spawn(move || {
@@ -62,6 +69,8 @@ fn init_target(target_config: &HashMap<String, Value>) -> (Sender<()>, JoinHandl
             .open(logname.clone())
             .expect(&format!("Unable to open log file {logname}"));
         write_log(&mut file, &format!("Starting ping monitor to {ip} as offline status"));
+
+        println!("Target startet at ip {} logging into {}", ip, logname);
 
         let mut status = false;
         let mut start = Instant::now();
@@ -98,6 +107,8 @@ fn init_target(target_config: &HashMap<String, Value>) -> (Sender<()>, JoinHandl
         }
 
         write_log(&mut file, "Ping monitor terminated");
+
+        println!("Target stopped at ip {} logging into {}", ip, logname);
     });
 
     (tx, join_handle)
@@ -120,5 +131,21 @@ fn unload_targets(targets: Vec<(Sender<()>, JoinHandle<()>)>) {
         if join_handle.join().is_err() {
             println!("Error joining target thread");
         }
+    }
+}
+
+struct TargetConfig {
+    logname: String,
+    ip: String,
+    delay: u64,
+}
+
+impl From<Value> for TargetConfig {
+    fn from(target: Value) -> Self {
+        let target_config = target.into_table().expect("target is not a table");
+        let logname = target_config.get("logname").expect("logname not found in target").clone().into_string().expect("logname is not a valid string");
+        let ip = target_config.get("ip").expect("ip not found in target").clone().into_string().expect("ip is not a valid string");
+        let delay = target_config.get("delay").map(|value| value.clone().into_uint().map(|value| std::cmp::max(value, 10)).expect("delay is not a valid unsigned integer")).unwrap_or(1000);
+        Self { logname, ip, delay }
     }
 }
