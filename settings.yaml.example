@@ -1,3 +1,4 @@
 targets:
   - logname: test.log # The log filename as a string. Accept absolute or relative path accessible by the process
     ip: 127.0.0.1 # Ip address to ping as a string. It must be a valid ip address (no hostname resolution could be done)
+    delay: 1000 # (Optional) Delay between ping in milliseconds as an unsigned integer. If value is lower tha 10ms, 10ms is used as default value. If no value is set, 1000ms is used.

@@ -1,7 +1,7 @@
-use std::{time::{Duration, Instant}, thread::{self, JoinHandle}, fs::{OpenOptions, File}, sync::mpsc::{Sender, Receiver}};
+use std::{time::{Duration, Instant}, thread::{self, JoinHandle}, fs::{OpenOptions, File}, sync::mpsc::{Sender, Receiver}, collections::HashMap};
 use std::io::prelude::*;
 use chrono::Local;
-use config::Config;
+use config::{Config, Value};
 use std::sync::mpsc::channel;
 use ctrlc;
 
@@ -35,14 +35,17 @@ fn load_targets(config: &Config) -> Vec<(Sender<()>, JoinHandle<()>)> {
     let mut targets_data = Vec::new();
     for target in config.get_array("targets").expect("targets not found in settings file") {
         let target_config = target.into_table().expect("target is not a table");
-        let logname = target_config.get("logname").expect("logname not found in target").clone().into_string().expect("logname is not a valid string");
-        let ip = target_config.get("ip").expect("ip not found in target").clone().into_string().expect("ip is not a valid string");
-        targets_data.push(init_target(&logname, &ip))
+        targets_data.push(init_target(&target_config))
     };
     targets_data
 }
 
-fn init_target(logname: &str, ip: &str) -> (Sender<()>, JoinHandle<()>) {
+fn init_target(target_config: &HashMap<String, Value>) -> (Sender<()>, JoinHandle<()>) {
+    let logname = target_config.get("logname").expect("logname not found in target").clone().into_string().expect("logname is not a valid string");
+    let ip = target_config.get("ip").expect("ip not found in target").clone().into_string().expect("ip is not a valid string");
+    let delay = target_config.get("delay").map(|value| value.clone().into_uint().map(|value| std::cmp::max(value, 10)).expect("delay is not a valid unsigned integer")).unwrap_or(1000);
+    let delay = Duration::from_secs(delay);
+
     let addr = ip.parse().expect("Unparsable ip address");
     let data = [1,2,3,4];  // ping data
     let timeout = Duration::from_secs(1);
@@ -89,7 +92,7 @@ fn init_target(logname: &str, ip: &str) -> (Sender<()>, JoinHandle<()>) {
                 }
             }
 
-            if rx.recv_timeout(Duration::from_secs(1)).is_ok() {
+            if rx.recv_timeout(delay).is_ok() {
                 break;
             }
         }
